@@ -1,0 +1,28 @@
+{
+  "name": "nft_vault",
+  "version": "0.3.0",
+  "description": "NFT vault protocol.",
+  "scripts": {
+    "test": "truffle test",
+    "eslint": "eslint --fix ."
+  },
+  "repository": "https://github.com/smartcontractsmith1/nft_vault",
+  "author": "smartcontractsmith1 <smartcontractsmith1@proton.me>",
+  "license": "MIT",
+  "devDependencies": {
+    "@eslint/js": "^9.39.2",
+    "@openzeppelin/test-helpers": "^0.5.16",
+    "eslint": "^9.39.2",
+    "eslint-config-prettier": "^10.1.8",
+    "eslint-plugin-prettier": "^5.5.4",
+    "globals": "^17.0.0",
+    "prettier": "^3.7.4"
+  },
+  "dependencies": {
+    "@babel/core": "^7.28.6",
+    "@babel/eslint-parser": "^7.28.6",
+    "@openzeppelin/contracts": "^5.4.0",
+    "truffle": "^5.11.5",
+    "web3-utils": "^4.3.3"
+  }
+}

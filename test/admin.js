@@ -147,15 +147,15 @@ contract('Vault | Admin setAllowedToken Tests', ([owner, nonOwner, penaltyReceiv
     );
     await nft.transferOwnership(this.vault.address, { from: owner });
 
-    this.poolManager = await artifacts.require('UniswapV4PoolManagerMock').new();
+    this.stateView = await artifacts.require('UniswapV4PoolManagerMock').new();
     this.token = await artifacts.require('ERC20Mock').new('TOKEN', 'TKN', owner, 1000);
     this.poolId = '0x' + this.token.address.replace('0x', '').toLowerCase().padStart(64, '0');
-    await this.poolManager.setPrice(this.poolId, '281474976710656');
+    await this.stateView.setPrice(this.poolId, '281474976710656');
   });
 
   it('Non-owner cannot call setAllowedToken', async() => {
     await tools.expectRevert(
-      this.vault.setAllowedToken(this.token.address, this.poolManager.address, this.poolId, true, { from: nonOwner })
+      this.vault.setAllowedToken(this.token.address, this.stateView.address, this.poolId, true, true, { from: nonOwner })
     );
   });
 
@@ -163,8 +163,9 @@ contract('Vault | Admin setAllowedToken Tests', ([owner, nonOwner, penaltyReceiv
     await tools.expectRevert(
       this.vault.setAllowedToken(
         '0x0000000000000000000000000000000000000000',
-        this.poolManager.address,
+        this.stateView.address,
         this.poolId,
+        true,
         true,
         { from: owner }
       ),
@@ -172,40 +173,61 @@ contract('Vault | Admin setAllowedToken Tests', ([owner, nonOwner, penaltyReceiv
     );
   });
 
-  it('setAllowedToken with zero poolManager address should revert', async() => {
+  it('setAllowedToken with zero stateView address should revert', async() => {
     await tools.expectRevert(
       this.vault.setAllowedToken(
         this.token.address,
         '0x0000000000000000000000000000000000000000',
         this.poolId,
         true,
+        true,
         { from: owner }
       ),
-      'poolManager can\'t be 0x'
+      'stateView can\'t be 0x'
     );
   });
 
-  it('setAllowedToken enables token correctly', async() => {
-    await this.vault.setAllowedToken(this.token.address, this.poolManager.address, this.poolId, true, { from: owner });
+  it('setAllowedToken enables token correctly and stores all fields', async() => {
+    await this.vault.setAllowedToken(
+      this.token.address, this.stateView.address, this.poolId, true, true, { from: owner }
+    );
     const stored = await this.vault.allowedTokens(this.token.address);
     assert.equal(stored.status, true, 'Token should be enabled');
+    assert.equal(stored.isToken0, true, 'isToken0 should be true');
     assert.equal(stored.token.toLowerCase(), this.token.address.toLowerCase(), 'Token address mismatch');
+    assert.equal(stored.stateView.toLowerCase(), this.stateView.address.toLowerCase(), 'stateView mismatch');
+    assert.equal(stored.poolId, this.poolId, 'poolId mismatch');
+  });
+
+  it('setAllowedToken with isToken0=false stores correctly', async() => {
+    await this.vault.setAllowedToken(
+      this.token.address, this.stateView.address, this.poolId, false, true, { from: owner }
+    );
+    const stored = await this.vault.allowedTokens(this.token.address);
+    assert.equal(stored.isToken0, false, 'isToken0 should be false');
+    assert.equal(stored.status, true, 'Token should be enabled');
   });
 
   it('setAllowedToken disables token correctly', async() => {
-    await this.vault.setAllowedToken(this.token.address, this.poolManager.address, this.poolId, true, { from: owner });
-    await this.vault.setAllowedToken(this.token.address, this.poolManager.address, this.poolId, false, { from: owner });
+    await this.vault.setAllowedToken(
+      this.token.address, this.stateView.address, this.poolId, true, true, { from: owner }
+    );
+    await this.vault.setAllowedToken(
+      this.token.address, this.stateView.address, this.poolId, true, false, { from: owner }
+    );
     const stored = await this.vault.allowedTokens(this.token.address);
     assert.equal(stored.status, false, 'Token should be disabled');
+    assert.equal(stored.isToken0, true, 'isToken0 should be preserved');
   });
 
   it('setAllowedToken emits TokenUpdated event', async() => {
     const tx = await this.vault.setAllowedToken(
-      this.token.address, this.poolManager.address, this.poolId, true, { from: owner }
+      this.token.address, this.stateView.address, this.poolId, true, true, { from: owner }
     );
     const event = tx.logs.find(e => e.event === 'TokenUpdated');
     assert.ok(event, 'TokenUpdated event not emitted');
     assert.equal(event.args.token.toLowerCase(), this.token.address.toLowerCase(), 'Wrong token in event');
+    assert.equal(event.args.isToken0, true, 'Wrong isToken0 in event');
     assert.equal(event.args.status, true, 'Wrong status in event');
   });
 });
@@ -300,13 +322,13 @@ contract('Vault | Admin Success Fee Integration Tests',
       );
       await this.nft.transferOwnership(this.vault.address, { from: owner });
 
-      this.poolManager = await artifacts.require('UniswapV4PoolManagerMock').new();
+      this.stateView = await artifacts.require('UniswapV4PoolManagerMock').new();
       this.TOKEN_A = await artifacts.require('ERC20Mock').new('TOKEN A', 'TKA', owner, 100000);
       await this.TOKEN_A.transfer(user, 50000, { from: owner });
       await this.TOKEN_A.approve(this.vault.address, 50000, { from: user });
       this.poolIdA = '0x' + this.TOKEN_A.address.replace('0x', '').toLowerCase().padStart(64, '0');
       await this.vault.setAllowedToken(
-        this.TOKEN_A.address, this.poolManager.address, this.poolIdA, true, { from: owner }
+        this.TOKEN_A.address, this.stateView.address, this.poolIdA, true, true, { from: owner }
       );
 
       this.BASE_PRICE = TWO.pow(new BN(96));
@@ -323,11 +345,11 @@ contract('Vault | Admin Success Fee Integration Tests',
       const NEW_RATE = new BN(1000);
       const expFee   = AMOUNT.mul(profit.mul(NEW_RATE).div(current)).div(this.FEES_DECIMALS);
 
-      await this.poolManager.setPrice(this.poolIdA, this.BASE_PRICE);
+      await this.stateView.setPrice(this.poolIdA, this.BASE_PRICE);
       const tx  = await tools.createDeposit(this.vault, user, [this.TOKEN_A], [AMOUNT], TERM);
-      const uid = parseInt(tx.logs[0].args.uid);
+      const uid = tx.logs.find(e => e.event === 'NewDeposit').args.uid.toNumber();
       await this.vault.changeSuccessFee(NEW_RATE, { from: owner });
-      await this.poolManager.setPrice(this.poolIdA, this.HIGH_PRICE);
+      await this.stateView.setPrice(this.poolIdA, this.HIGH_PRICE);
       const feeBefore  = await this.TOKEN_A.balanceOf(successFeeReceiver);
       const userBefore = await this.TOKEN_A.balanceOf(user);
       await tools.advanceTime(TERM + 1);
@@ -343,11 +365,11 @@ contract('Vault | Admin Success Fee Integration Tests',
       const current = AMOUNT.add(profit);
       const expFee  = AMOUNT.mul(profit.mul(this.FEE_BPS).div(current)).div(this.FEES_DECIMALS);
 
-      await this.poolManager.setPrice(this.poolIdA, this.BASE_PRICE);
+      await this.stateView.setPrice(this.poolIdA, this.BASE_PRICE);
       const tx  = await tools.createDeposit(this.vault, user, [this.TOKEN_A], [AMOUNT], TERM);
-      const uid = parseInt(tx.logs[0].args.uid);
+      const uid = tx.logs.find(e => e.event === 'NewDeposit').args.uid.toNumber();
       await this.vault.changeSuccessFeeReceiver(newFeeReceiver, { from: owner });
-      await this.poolManager.setPrice(this.poolIdA, this.HIGH_PRICE);
+      await this.stateView.setPrice(this.poolIdA, this.HIGH_PRICE);
       const origBefore = await this.TOKEN_A.balanceOf(successFeeReceiver);
       const newBefore  = await this.TOKEN_A.balanceOf(newFeeReceiver);
       await tools.advanceTime(TERM + 1);

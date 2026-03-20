@@ -19,7 +19,7 @@ contract('Vault | Withdraw Tests', ([owner, user, otherUser, penaltyReceiver]) =
     ]);
     [this.COSMIC, this.USDT, this.USDC] = this.tokens;
 
-    this.poolManager = await tools.setupAllowedTokens(owner, this.vault, this.tokens);
+    this.stateView = await tools.setupAllowedTokens(owner, this.vault, this.tokens);
   });
 
   it('Withdraw after term should succeed', async() => {
@@ -144,6 +144,19 @@ contract('Vault | Withdraw Tests', ([owner, user, otherUser, penaltyReceiver]) =
   it('Withdraw with nonexistent uid should revert', async() => {
     await tools.expectRevert(this.vault.withdraw(9999, { from: user }));
   });
+
+  it('deposit → withdraw → new deposit with same token succeeds', async() => {
+    const uid1 = await tools.setupSingleDeposit(this.vault, user, this.COSMIC, 500, 2);
+
+    await tools.advanceTime(3);
+    await tools.withdraw(this.vault, user, uid1);
+    await tools.checkDepositActive(this.vault, uid1, false);
+
+    const uid2 = await tools.setupSingleDeposit(this.vault, user, this.COSMIC, 500, 2);
+    await tools.checkNFTOwner(this.nft, uid2, user);
+    await tools.checkDepositActive(this.vault, uid2, true);
+    assert(uid2 !== uid1, 'second deposit must have a different uid');
+  });
 });
 
 contract('Vault | Withdraw Success Fee Tests', ([owner, user, penaltyReceiver, successFeeReceiver]) => {
@@ -154,7 +167,7 @@ contract('Vault | Withdraw Success Fee Tests', ([owner, user, penaltyReceiver, s
     );
     await this.nft.transferOwnership(this.vault.address, { from: owner });
 
-    this.poolManager = await artifacts.require('UniswapV4PoolManagerMock').new();
+    this.stateView = await artifacts.require('UniswapV4PoolManagerMock').new();
 
     this.TOKEN_A = await artifacts.require('ERC20Mock').new('TOKEN A', 'TKA', owner, 100000);
     this.TOKEN_B = await artifacts.require('ERC20Mock').new('TOKEN B', 'TKB', owner, 100000);
@@ -163,7 +176,7 @@ contract('Vault | Withdraw Success Fee Tests', ([owner, user, penaltyReceiver, s
       await token.transfer(user, 50000, { from: owner });
       await token.approve(this.vault.address, 50000, { from: user });
       const poolId = '0x' + token.address.replace('0x', '').toLowerCase().padStart(64, '0');
-      await this.vault.setAllowedToken(token.address, this.poolManager.address, poolId, true, { from: owner });
+      await this.vault.setAllowedToken(token.address, this.stateView.address, poolId, true, true, { from: owner });
     }
 
     this.poolIdA = '0x' + this.TOKEN_A.address.replace('0x', '').toLowerCase().padStart(64, '0');
@@ -181,7 +194,7 @@ contract('Vault | Withdraw Success Fee Tests', ([owner, user, penaltyReceiver, s
     const AMOUNT = new BN(10000);
     const TERM   = 2;
 
-    await this.poolManager.setPrice(this.poolIdA, this.BASE_PRICE);
+    await this.stateView.setPrice(this.poolIdA, this.BASE_PRICE);
     let tx  = await tools.createDeposit(this.vault, user, [this.TOKEN_A], [AMOUNT], TERM);
     let uid = tx.logs.find(e => e.event === 'NewDeposit').args.uid.toNumber();
     let userBefore = await this.TOKEN_A.balanceOf(user);
@@ -191,10 +204,10 @@ contract('Vault | Withdraw Success Fee Tests', ([owner, user, penaltyReceiver, s
     assert((await this.TOKEN_A.balanceOf(user)).sub(userBefore).eq(AMOUNT), 'unchanged: user full amount');
     assert((await this.TOKEN_A.balanceOf(successFeeReceiver)).eq(feeBefore), 'unchanged: no fee');
 
-    await this.poolManager.setPrice(this.poolIdA, this.BASE_PRICE);
+    await this.stateView.setPrice(this.poolIdA, this.BASE_PRICE);
     tx  = await tools.createDeposit(this.vault, user, [this.TOKEN_A], [AMOUNT], TERM);
     uid = tx.logs.find(e => e.event === 'NewDeposit').args.uid.toNumber();
-    await this.poolManager.setPrice(this.poolIdA, this.LOW_PRICE);
+    await this.stateView.setPrice(this.poolIdA, this.LOW_PRICE);
     userBefore = await this.TOKEN_A.balanceOf(user);
     feeBefore  = await this.TOKEN_A.balanceOf(successFeeReceiver);
     await tools.advanceTime(TERM + 1);
@@ -208,10 +221,10 @@ contract('Vault | Withdraw Success Fee Tests', ([owner, user, penaltyReceiver, s
     const TERM   = 2;
 
     await this.vault.changeSuccessFee(0, { from: owner });
-    await this.poolManager.setPrice(this.poolIdA, this.BASE_PRICE);
+    await this.stateView.setPrice(this.poolIdA, this.BASE_PRICE);
     let tx  = await tools.createDeposit(this.vault, user, [this.TOKEN_A], [AMOUNT], TERM);
     let uid = tx.logs.find(e => e.event === 'NewDeposit').args.uid.toNumber();
-    await this.poolManager.setPrice(this.poolIdA, this.HIGH_PRICE);
+    await this.stateView.setPrice(this.poolIdA, this.HIGH_PRICE);
     let feeBefore = await this.TOKEN_A.balanceOf(successFeeReceiver);
     await tools.advanceTime(TERM + 1);
     await this.vault.withdraw(uid, { from: user });
@@ -224,10 +237,10 @@ contract('Vault | Withdraw Success Fee Tests', ([owner, user, penaltyReceiver, s
     const expFee100  = AMOUNT.mul(frac100).div(this.FEES_DECIMALS);
     const expUser100 = AMOUNT.sub(expFee100);
     await this.vault.changeSuccessFee(MAX_FEE, { from: owner });
-    await this.poolManager.setPrice(this.poolIdA, this.BASE_PRICE);
+    await this.stateView.setPrice(this.poolIdA, this.BASE_PRICE);
     tx  = await tools.createDeposit(this.vault, user, [this.TOKEN_A], [AMOUNT], TERM);
     uid = tx.logs.find(e => e.event === 'NewDeposit').args.uid.toNumber();
-    await this.poolManager.setPrice(this.poolIdA, this.HIGH_PRICE);
+    await this.stateView.setPrice(this.poolIdA, this.HIGH_PRICE);
     feeBefore         = await this.TOKEN_A.balanceOf(successFeeReceiver);
     const userBefore  = await this.TOKEN_A.balanceOf(user);
     await tools.advanceTime(TERM + 1);
@@ -248,10 +261,10 @@ contract('Vault | Withdraw Success Fee Tests', ([owner, user, penaltyReceiver, s
     const expFee      = AMOUNT.mul(feeFraction).div(this.FEES_DECIMALS);
     const expUser     = AMOUNT.sub(expFee);
 
-    await this.poolManager.setPrice(this.poolIdA, this.BASE_PRICE);
+    await this.stateView.setPrice(this.poolIdA, this.BASE_PRICE);
     const tx  = await tools.createDeposit(this.vault, user, [this.TOKEN_A], [AMOUNT], TERM);
     const uid = tx.logs.find(e => e.event === 'NewDeposit').args.uid.toNumber();
-    await this.poolManager.setPrice(this.poolIdA, this.HIGH_PRICE);
+    await this.stateView.setPrice(this.poolIdA, this.HIGH_PRICE);
 
     const feeBefore  = await this.TOKEN_A.balanceOf(successFeeReceiver);
     const userBefore = await this.TOKEN_A.balanceOf(user);
@@ -266,8 +279,8 @@ contract('Vault | Withdraw Success Fee Tests', ([owner, user, penaltyReceiver, s
     const AMOUNT = new BN(10000);
     const TERM   = 2;
 
-    await this.poolManager.setPrice(this.poolIdA, this.BASE_PRICE);
-    await this.poolManager.setPrice(this.poolIdB, this.BASE_PRICE);
+    await this.stateView.setPrice(this.poolIdA, this.BASE_PRICE);
+    await this.stateView.setPrice(this.poolIdB, this.BASE_PRICE);
     let tx  = await tools.createDeposit(this.vault, user, [this.TOKEN_A, this.TOKEN_B], [AMOUNT, AMOUNT], TERM);
     let uid = tx.logs.find(e => e.event === 'NewDeposit').args.uid.toNumber();
     let userBeforeA = await this.TOKEN_A.balanceOf(user);
@@ -277,12 +290,12 @@ contract('Vault | Withdraw Success Fee Tests', ([owner, user, penaltyReceiver, s
     assert((await this.TOKEN_A.balanceOf(user)).sub(userBeforeA).eq(AMOUNT), 'no-change: user_A');
     assert((await this.TOKEN_B.balanceOf(user)).sub(userBeforeB).eq(AMOUNT), 'no-change: user_B');
 
-    await this.poolManager.setPrice(this.poolIdA, this.BASE_PRICE);
-    await this.poolManager.setPrice(this.poolIdB, this.BASE_PRICE);
+    await this.stateView.setPrice(this.poolIdA, this.BASE_PRICE);
+    await this.stateView.setPrice(this.poolIdB, this.BASE_PRICE);
     tx  = await tools.createDeposit(this.vault, user, [this.TOKEN_A, this.TOKEN_B], [AMOUNT, AMOUNT], TERM);
     uid = tx.logs.find(e => e.event === 'NewDeposit').args.uid.toNumber();
-    await this.poolManager.setPrice(this.poolIdA, this.LOW_PRICE);
-    await this.poolManager.setPrice(this.poolIdB, this.LOW_PRICE);
+    await this.stateView.setPrice(this.poolIdA, this.LOW_PRICE);
+    await this.stateView.setPrice(this.poolIdB, this.LOW_PRICE);
     userBeforeA = await this.TOKEN_A.balanceOf(user);
     userBeforeB = await this.TOKEN_B.balanceOf(user);
     await tools.advanceTime(TERM + 1);
@@ -295,11 +308,11 @@ contract('Vault | Withdraw Success Fee Tests', ([owner, user, penaltyReceiver, s
     const AMOUNT = new BN(10000);
     const TERM   = 2;
 
-    await this.poolManager.setPrice(this.poolIdA, this.BASE_PRICE);
-    await this.poolManager.setPrice(this.poolIdB, this.BASE_PRICE);
+    await this.stateView.setPrice(this.poolIdA, this.BASE_PRICE);
+    await this.stateView.setPrice(this.poolIdB, this.BASE_PRICE);
     let tx  = await tools.createDeposit(this.vault, user, [this.TOKEN_A, this.TOKEN_B], [AMOUNT, AMOUNT], TERM);
     let uid = tx.logs.find(e => e.event === 'NewDeposit').args.uid.toNumber();
-    await this.poolManager.setPrice(this.poolIdA, this.HIGH_PRICE);
+    await this.stateView.setPrice(this.poolIdA, this.HIGH_PRICE);
     const partialProfit  = AMOUNT.muln(3);
     const partialCurrent = AMOUNT.muln(2).add(partialProfit);
     const partialFrac    = partialProfit.mul(this.FEE_BPS).div(partialCurrent);
@@ -311,12 +324,12 @@ contract('Vault | Withdraw Success Fee Tests', ([owner, user, penaltyReceiver, s
     assert((await this.TOKEN_A.balanceOf(user)).sub(userBeforeA).eq(AMOUNT.sub(partialFeeEach)), 'partial: user_A');
     assert((await this.TOKEN_B.balanceOf(user)).sub(userBeforeB).eq(AMOUNT.sub(partialFeeEach)), 'partial: user_B');
 
-    await this.poolManager.setPrice(this.poolIdA, this.BASE_PRICE);
-    await this.poolManager.setPrice(this.poolIdB, this.BASE_PRICE);
+    await this.stateView.setPrice(this.poolIdA, this.BASE_PRICE);
+    await this.stateView.setPrice(this.poolIdB, this.BASE_PRICE);
     tx  = await tools.createDeposit(this.vault, user, [this.TOKEN_A, this.TOKEN_B], [AMOUNT, AMOUNT], TERM);
     uid = tx.logs.find(e => e.event === 'NewDeposit').args.uid.toNumber();
-    await this.poolManager.setPrice(this.poolIdA, this.HIGH_PRICE);
-    await this.poolManager.setPrice(this.poolIdB, this.HIGH_PRICE);
+    await this.stateView.setPrice(this.poolIdA, this.HIGH_PRICE);
+    await this.stateView.setPrice(this.poolIdB, this.HIGH_PRICE);
     const bothProfit  = AMOUNT.muln(6);
     const bothCurrent = AMOUNT.muln(2).add(bothProfit);
     const bothFrac    = bothProfit.mul(this.FEE_BPS).div(bothCurrent);
@@ -329,6 +342,35 @@ contract('Vault | Withdraw Success Fee Tests', ([owner, user, penaltyReceiver, s
     assert((await this.TOKEN_B.balanceOf(user)).sub(userBeforeB).eq(AMOUNT.sub(bothFeeEach)), 'both-rise: user_B');
   });
 
+  it('multi-token: one up one down net positive → fee charged on both tokens', async() => {
+    const AMOUNT = new BN(10000);
+    const TERM   = 2;
+
+    await this.stateView.setPrice(this.poolIdA, this.BASE_PRICE);
+    await this.stateView.setPrice(this.poolIdB, this.BASE_PRICE);
+    const tx  = await tools.createDeposit(this.vault, user, [this.TOKEN_A, this.TOKEN_B], [AMOUNT, AMOUNT], TERM);
+    const uid = tx.logs.find(e => e.event === 'NewDeposit').args.uid.toNumber();
+
+    await this.stateView.setPrice(this.poolIdA, this.HIGH_PRICE);
+    await this.stateView.setPrice(this.poolIdB, this.LOW_PRICE);
+
+    const profitA    = AMOUNT.muln(3);
+    const lossB      = AMOUNT.sub(AMOUNT.divn(4));
+    const netProfit  = profitA.sub(lossB);
+    const initVal    = AMOUNT.muln(2);
+    const curVal     = initVal.add(netProfit);
+    const feeFrac    = netProfit.mul(this.FEE_BPS).div(curVal);
+    const feeEach    = AMOUNT.mul(feeFrac).div(this.FEES_DECIMALS);
+
+    const userBeforeA = await this.TOKEN_A.balanceOf(user);
+    const userBeforeB = await this.TOKEN_B.balanceOf(user);
+    await tools.advanceTime(TERM + 1);
+    await this.vault.withdraw(uid, { from: user });
+
+    assert((await this.TOKEN_A.balanceOf(user)).sub(userBeforeA).eq(AMOUNT.sub(feeEach)), 'up-down: user_A');
+    assert((await this.TOKEN_B.balanceOf(user)).sub(userBeforeB).eq(AMOUNT.sub(feeEach)), 'up-down: user_B');
+  });
+
   it('multi-token: one disabled at withdrawal, profit from enabled only, fee charged on all', async() => {
     const AMOUNT = new BN(10000);
     const TERM   = 2;
@@ -337,15 +379,15 @@ contract('Vault | Withdraw Success Fee Tests', ([owner, user, penaltyReceiver, s
     const disabledFrac    = disabledProfit.mul(this.FEE_BPS).div(disabledCurrent);
     const disabledFeeEach = AMOUNT.mul(disabledFrac).div(this.FEES_DECIMALS);
 
-    await this.poolManager.setPrice(this.poolIdA, this.BASE_PRICE);
-    await this.poolManager.setPrice(this.poolIdB, this.BASE_PRICE);
+    await this.stateView.setPrice(this.poolIdA, this.BASE_PRICE);
+    await this.stateView.setPrice(this.poolIdB, this.BASE_PRICE);
     const tx  = await tools.createDeposit(this.vault, user, [this.TOKEN_A, this.TOKEN_B], [AMOUNT, AMOUNT], TERM);
     const uid = tx.logs.find(e => e.event === 'NewDeposit').args.uid.toNumber();
 
     await this.vault.setAllowedToken(
-      this.TOKEN_B.address, this.poolManager.address, this.poolIdB, false, { from: owner }
+      this.TOKEN_B.address, this.stateView.address, this.poolIdB, true, false, { from: owner }
     );
-    await this.poolManager.setPrice(this.poolIdA, this.HIGH_PRICE);
+    await this.stateView.setPrice(this.poolIdA, this.HIGH_PRICE);
 
     const userBeforeA = await this.TOKEN_A.balanceOf(user);
     const userBeforeB = await this.TOKEN_B.balanceOf(user);
@@ -364,10 +406,10 @@ contract('Vault | Withdraw Success Fee Tests', ([owner, user, penaltyReceiver, s
     const feeFraction = profit.mul(this.FEE_BPS).div(currentVal);
     const expFee      = AMOUNT.mul(feeFraction).div(this.FEES_DECIMALS);
 
-    await this.poolManager.setPrice(this.poolIdA, this.BASE_PRICE);
+    await this.stateView.setPrice(this.poolIdA, this.BASE_PRICE);
     let tx  = await tools.createDeposit(this.vault, user, [this.TOKEN_A], [AMOUNT], TERM);
     let uid = tx.logs.find(e => e.event === 'NewDeposit').args.uid.toNumber();
-    await this.poolManager.setPrice(this.poolIdA, this.HIGH_PRICE);
+    await this.stateView.setPrice(this.poolIdA, this.HIGH_PRICE);
     await tools.advanceTime(TERM + 1);
     let wTx       = await this.vault.withdraw(uid, { from: user });
     let feeEvent  = wTx.logs.find(e => e.event === 'SuccessFeeCharged');
@@ -378,7 +420,7 @@ contract('Vault | Withdraw Success Fee Tests', ([owner, user, penaltyReceiver, s
     assert.equal(feeEvent.args.token.toLowerCase(), this.TOKEN_A.address.toLowerCase(), 'SuccessFeeCharged: token');
     assert(new BN(feeEvent.args.amount).eq(expFee), `SuccessFeeCharged: amount expected ${expFee}`);
 
-    await this.poolManager.setPrice(this.poolIdA, this.BASE_PRICE);
+    await this.stateView.setPrice(this.poolIdA, this.BASE_PRICE);
     tx  = await tools.createDeposit(this.vault, user, [this.TOKEN_A], [AMOUNT], TERM);
     uid = tx.logs.find(e => e.event === 'NewDeposit').args.uid.toNumber();
     await tools.advanceTime(TERM + 1);
@@ -396,13 +438,322 @@ contract('Vault | Withdraw Success Fee Tests', ([owner, user, penaltyReceiver, s
     const TERM   = 2;
     const expProfit = AMOUNT.muln(3);
 
-    await this.poolManager.setPrice(this.poolIdA, this.BASE_PRICE);
+    await this.stateView.setPrice(this.poolIdA, this.BASE_PRICE);
     const tx  = await tools.createDeposit(this.vault, user, [this.TOKEN_A], [AMOUNT], TERM);
     const uid = tx.logs.find(e => e.event === 'NewDeposit').args.uid.toNumber();
 
     assert(new BN(await this.vault.getDepositProfit(uid)).eq(new BN(0)), 'no change: profit = 0');
 
-    await this.poolManager.setPrice(this.poolIdA, this.HIGH_PRICE);
+    await this.stateView.setPrice(this.poolIdA, this.HIGH_PRICE);
     assert(new BN(await this.vault.getDepositProfit(uid)).eq(expProfit), `4x rise: profit = ${expProfit}`);
+  });
+
+  it('isToken0=false: sqrtPrice drops (token appreciates) → fee charged', async() => {
+    const AMOUNT = new BN(10000);
+    const TERM   = 2;
+
+    await this.vault.setAllowedToken(
+      this.TOKEN_A.address, this.stateView.address, this.poolIdA, false, true, { from: owner }
+    );
+
+    await this.stateView.setPrice(this.poolIdA, this.BASE_PRICE);
+    const tx  = await tools.createDeposit(this.vault, user, [this.TOKEN_A], [AMOUNT], TERM);
+    const uid = tx.logs.find(e => e.event === 'NewDeposit').args.uid.toNumber();
+    await this.stateView.setPrice(this.poolIdA, this.LOW_PRICE);
+
+    const profit      = AMOUNT.muln(3);
+    const currentVal  = AMOUNT.add(profit);
+    const feeFraction = profit.mul(this.FEE_BPS).div(currentVal);
+    const expFee      = AMOUNT.mul(feeFraction).div(this.FEES_DECIMALS);
+    const expUser     = AMOUNT.sub(expFee);
+
+    const feeBefore  = await this.TOKEN_A.balanceOf(successFeeReceiver);
+    const userBefore = await this.TOKEN_A.balanceOf(user);
+    await tools.advanceTime(TERM + 1);
+    await this.vault.withdraw(uid, { from: user });
+
+    assert((await this.TOKEN_A.balanceOf(successFeeReceiver)).sub(feeBefore).eq(expFee), `fee: expected ${expFee}`);
+    assert((await this.TOKEN_A.balanceOf(user)).sub(userBefore).eq(expUser), `user: expected ${expUser}`);
+  });
+
+  it('isToken0=false: sqrtPrice rises (token depreciates) → no fee, full amount returned', async() => {
+    const AMOUNT = new BN(10000);
+    const TERM   = 2;
+
+    await this.vault.setAllowedToken(
+      this.TOKEN_A.address, this.stateView.address, this.poolIdA, false, true, { from: owner }
+    );
+
+    await this.stateView.setPrice(this.poolIdA, this.BASE_PRICE);
+    const tx  = await tools.createDeposit(this.vault, user, [this.TOKEN_A], [AMOUNT], TERM);
+    const uid = tx.logs.find(e => e.event === 'NewDeposit').args.uid.toNumber();
+    await this.stateView.setPrice(this.poolIdA, this.HIGH_PRICE);
+
+    const userBefore = await this.TOKEN_A.balanceOf(user);
+    await tools.advanceTime(TERM + 1);
+    await this.vault.withdraw(uid, { from: user });
+
+    assert((await this.TOKEN_A.balanceOf(user)).sub(userBefore).eq(AMOUNT), 'full amount returned');
+  });
+
+  it('bad price: sqrtPriceX96=1 causes directPriceX96=0 → getDepositProfit reverts with "bad price"', async() => {
+    const AMOUNT = new BN(10000);
+    const TERM   = 2;
+
+    await this.stateView.setPrice(this.poolIdA, this.BASE_PRICE);
+    const tx  = await tools.createDeposit(this.vault, user, [this.TOKEN_A], [AMOUNT], TERM);
+    const uid = tx.logs.find(e => e.event === 'NewDeposit').args.uid.toNumber();
+
+    await this.stateView.setPrice(this.poolIdA, new BN(1));
+    await tools.expectRevert(this.vault.getDepositProfit(uid), 'bad price');
+  });
+
+  it('getDepositProfit: isToken0=false returns 0 at same price; returns profit on inverse 4x rise', async() => {
+    const AMOUNT = new BN(10000);
+    const TERM   = 2;
+
+    await this.vault.setAllowedToken(
+      this.TOKEN_A.address, this.stateView.address, this.poolIdA, false, true, { from: owner }
+    );
+
+    await this.stateView.setPrice(this.poolIdA, this.BASE_PRICE);
+    const tx  = await tools.createDeposit(this.vault, user, [this.TOKEN_A], [AMOUNT], TERM);
+    const uid = tx.logs.find(e => e.event === 'NewDeposit').args.uid.toNumber();
+
+    assert(new BN(await this.vault.getDepositProfit(uid)).eq(new BN(0)), 'no change: profit = 0');
+
+    await this.stateView.setPrice(this.poolIdA, this.LOW_PRICE);
+    const expProfit = AMOUNT.muln(3);
+    assert(new BN(await this.vault.getDepositProfit(uid)).eq(expProfit), `inverse 4x: profit = ${expProfit}`);
+  });
+
+  it('mixed isToken0: TOKEN_A=true (direct 4x) + TOKEN_B=false (inverse 4x) → fee on combined profit', async() => {
+    const AMOUNT = new BN(10000);
+    const TERM   = 2;
+
+    await this.vault.setAllowedToken(
+      this.TOKEN_B.address, this.stateView.address, this.poolIdB, false, true, { from: owner }
+    );
+
+    await this.stateView.setPrice(this.poolIdA, this.BASE_PRICE);
+    await this.stateView.setPrice(this.poolIdB, this.BASE_PRICE);
+    const tx  = await tools.createDeposit(this.vault, user, [this.TOKEN_A, this.TOKEN_B], [AMOUNT, AMOUNT], TERM);
+    const uid = tx.logs.find(e => e.event === 'NewDeposit').args.uid.toNumber();
+
+    await this.stateView.setPrice(this.poolIdA, this.HIGH_PRICE);
+    await this.stateView.setPrice(this.poolIdB, this.LOW_PRICE);
+
+    const totalProfit  = AMOUNT.muln(6);
+    const totalCurrent = AMOUNT.muln(2).add(totalProfit);
+    const feeFraction  = totalProfit.mul(this.FEE_BPS).div(totalCurrent);
+    const feeEach      = AMOUNT.mul(feeFraction).div(this.FEES_DECIMALS);
+
+    const userBeforeA = await this.TOKEN_A.balanceOf(user);
+    const userBeforeB = await this.TOKEN_B.balanceOf(user);
+    await tools.advanceTime(TERM + 1);
+    await this.vault.withdraw(uid, { from: user });
+
+    assert((await this.TOKEN_A.balanceOf(user)).sub(userBeforeA).eq(AMOUNT.sub(feeEach)), `mixed: user_A`);
+    assert((await this.TOKEN_B.balanceOf(user)).sub(userBeforeB).eq(AMOUNT.sub(feeEach)), `mixed: user_B`);
+  });
+
+  it('multi-token: all tokens disabled after deposit, no fee, full amounts returned', async() => {
+    const AMOUNT = new BN(10000);
+    const TERM   = 2;
+
+    await this.stateView.setPrice(this.poolIdA, this.BASE_PRICE);
+    await this.stateView.setPrice(this.poolIdB, this.BASE_PRICE);
+    const tx  = await tools.createDeposit(this.vault, user, [this.TOKEN_A, this.TOKEN_B], [AMOUNT, AMOUNT], TERM);
+    const uid = tx.logs.find(e => e.event === 'NewDeposit').args.uid.toNumber();
+
+    await this.vault.setAllowedToken(
+      this.TOKEN_A.address, this.stateView.address, this.poolIdA, true, false, { from: owner }
+    );
+    await this.vault.setAllowedToken(
+      this.TOKEN_B.address, this.stateView.address, this.poolIdB, true, false, { from: owner }
+    );
+    await this.stateView.setPrice(this.poolIdA, this.HIGH_PRICE);
+    await this.stateView.setPrice(this.poolIdB, this.HIGH_PRICE);
+
+    const userBeforeA = await this.TOKEN_A.balanceOf(user);
+    const userBeforeB = await this.TOKEN_B.balanceOf(user);
+    await tools.advanceTime(TERM + 1);
+    await this.vault.withdraw(uid, { from: user });
+
+    assert((await this.TOKEN_A.balanceOf(user)).sub(userBeforeA).eq(AMOUNT), 'all-disabled: full A');
+    assert((await this.TOKEN_B.balanceOf(user)).sub(userBeforeB).eq(AMOUNT), 'all-disabled: full B');
+  });
+
+  it('tiny price increase: profit rounds to 0, no fee charged', async() => {
+    const AMOUNT = new BN(10000);
+    const TERM   = 2;
+
+    await this.stateView.setPrice(this.poolIdA, this.BASE_PRICE);
+    const tx  = await tools.createDeposit(this.vault, user, [this.TOKEN_A], [AMOUNT], TERM);
+    const uid = tx.logs.find(e => e.event === 'NewDeposit').args.uid.toNumber();
+
+    await this.stateView.setPrice(this.poolIdA, this.BASE_PRICE.addn(1));
+    const userBefore = await this.TOKEN_A.balanceOf(user);
+    await tools.advanceTime(TERM + 1);
+    await this.vault.withdraw(uid, { from: user });
+
+    assert((await this.TOKEN_A.balanceOf(user)).sub(userBefore).eq(AMOUNT), 'tiny increase: full amount returned');
+  });
+
+  it('small amount: profit > 0 but fee rounds to 0, full amount returned', async() => {
+    const AMOUNT = new BN(1);
+    const TERM   = 2;
+
+    await this.stateView.setPrice(this.poolIdA, this.BASE_PRICE);
+    const tx  = await tools.createDeposit(this.vault, user, [this.TOKEN_A], [AMOUNT], TERM);
+    const uid = tx.logs.find(e => e.event === 'NewDeposit').args.uid.toNumber();
+    await this.stateView.setPrice(this.poolIdA, this.HIGH_PRICE);
+
+    const userBefore = await this.TOKEN_A.balanceOf(user);
+    await tools.advanceTime(TERM + 1);
+    await this.vault.withdraw(uid, { from: user });
+
+    assert((await this.TOKEN_A.balanceOf(user)).sub(userBefore).eq(AMOUNT), 'small amount: full returned (fee=0)');
+  });
+
+  it('multi-token: SuccessFeeCharged emitted for each token with profit', async() => {
+    const AMOUNT = new BN(10000);
+    const TERM   = 2;
+
+    await this.stateView.setPrice(this.poolIdA, this.BASE_PRICE);
+    await this.stateView.setPrice(this.poolIdB, this.BASE_PRICE);
+    const tx  = await tools.createDeposit(this.vault, user, [this.TOKEN_A, this.TOKEN_B], [AMOUNT, AMOUNT], TERM);
+    const uid = tx.logs.find(e => e.event === 'NewDeposit').args.uid.toNumber();
+    await this.stateView.setPrice(this.poolIdA, this.HIGH_PRICE);
+    await this.stateView.setPrice(this.poolIdB, this.HIGH_PRICE);
+
+    await tools.advanceTime(TERM + 1);
+    const wTx = await this.vault.withdraw(uid, { from: user });
+
+    const feeEvents = wTx.logs.filter(e => e.event === 'SuccessFeeCharged');
+    assert.equal(feeEvents.length, 2, 'should emit SuccessFeeCharged for each token');
+    const addrs = feeEvents.map(e => e.args.token.toLowerCase());
+    assert(addrs.includes(this.TOKEN_A.address.toLowerCase()), 'missing SuccessFeeCharged for TOKEN_A');
+    assert(addrs.includes(this.TOKEN_B.address.toLowerCase()), 'missing SuccessFeeCharged for TOKEN_B');
+  });
+
+  it('getDepositProfit: multi-token returns correct combined profit', async() => {
+    const AMOUNT = new BN(10000);
+    const TERM   = 2;
+
+    await this.stateView.setPrice(this.poolIdA, this.BASE_PRICE);
+    await this.stateView.setPrice(this.poolIdB, this.BASE_PRICE);
+    const tx  = await tools.createDeposit(this.vault, user, [this.TOKEN_A, this.TOKEN_B], [AMOUNT, AMOUNT], TERM);
+    const uid = tx.logs.find(e => e.event === 'NewDeposit').args.uid.toNumber();
+
+    assert(new BN(await this.vault.getDepositProfit(uid)).eq(new BN(0)), 'no change: profit = 0');
+
+    await this.stateView.setPrice(this.poolIdA, this.HIGH_PRICE);
+    await this.stateView.setPrice(this.poolIdB, this.HIGH_PRICE);
+    assert(new BN(await this.vault.getDepositProfit(uid)).eq(AMOUNT.muln(6)), 'both 4x: profit = 6*AMOUNT');
+
+    await this.stateView.setPrice(this.poolIdB, this.BASE_PRICE);
+    assert(new BN(await this.vault.getDepositProfit(uid)).eq(AMOUNT.muln(3)), 'one 4x: profit = 3*AMOUNT');
+  });
+
+  it('3-token: all tokens at 4x price → fee computed across all three', async() => {
+    const AMOUNT = new BN(10000);
+    const TERM   = 2;
+
+    this.TOKEN_C = await artifacts.require('ERC20Mock').new('TOKEN C', 'TKC', owner, 100000);
+    await this.TOKEN_C.transfer(user, 50000, { from: owner });
+    await this.TOKEN_C.approve(this.vault.address, 50000, { from: user });
+    const poolIdC = '0x' + this.TOKEN_C.address.replace('0x', '').toLowerCase().padStart(64, '0');
+    await this.stateView.setPrice(poolIdC, this.BASE_PRICE);
+    await this.vault.setAllowedToken(
+      this.TOKEN_C.address, this.stateView.address, poolIdC, true, true, { from: owner }
+    );
+
+    await this.stateView.setPrice(this.poolIdA, this.BASE_PRICE);
+    await this.stateView.setPrice(this.poolIdB, this.BASE_PRICE);
+    const tx = await tools.createDeposit(
+      this.vault, user, [this.TOKEN_A, this.TOKEN_B, this.TOKEN_C], [AMOUNT, AMOUNT, AMOUNT], TERM
+    );
+    const uid = tx.logs.find(e => e.event === 'NewDeposit').args.uid.toNumber();
+
+    await this.stateView.setPrice(this.poolIdA, this.HIGH_PRICE);
+    await this.stateView.setPrice(this.poolIdB, this.HIGH_PRICE);
+    await this.stateView.setPrice(poolIdC, this.HIGH_PRICE);
+
+    const totalProfit  = AMOUNT.muln(9);
+    const totalCurrent = AMOUNT.muln(3).add(totalProfit);
+    const feeFraction  = totalProfit.mul(this.FEE_BPS).div(totalCurrent);
+    const feeEach      = AMOUNT.mul(feeFraction).div(this.FEES_DECIMALS);
+
+    const userBeforeA = await this.TOKEN_A.balanceOf(user);
+    const userBeforeB = await this.TOKEN_B.balanceOf(user);
+    const userBeforeC = await this.TOKEN_C.balanceOf(user);
+    await tools.advanceTime(TERM + 1);
+    await this.vault.withdraw(uid, { from: user });
+
+    assert((await this.TOKEN_A.balanceOf(user)).sub(userBeforeA).eq(AMOUNT.sub(feeEach)), '3-token: user_A');
+    assert((await this.TOKEN_B.balanceOf(user)).sub(userBeforeB).eq(AMOUNT.sub(feeEach)), '3-token: user_B');
+    assert((await this.TOKEN_C.balanceOf(user)).sub(userBeforeC).eq(AMOUNT.sub(feeEach)), '3-token: user_C');
+  });
+
+  it('multi-token: different amounts [1000, 5000] both 4x → fee fraction shared, absolute fee differs', async() => {
+    const AMOUNT_A = new BN(1000);
+    const AMOUNT_B = new BN(5000);
+    const TERM = 2;
+
+    await this.stateView.setPrice(this.poolIdA, this.BASE_PRICE);
+    await this.stateView.setPrice(this.poolIdB, this.BASE_PRICE);
+    const tx = await tools.createDeposit(
+      this.vault, user, [this.TOKEN_A, this.TOKEN_B], [AMOUNT_A, AMOUNT_B], TERM
+    );
+    const uid = tx.logs.find(e => e.event === 'NewDeposit').args.uid.toNumber();
+
+    await this.stateView.setPrice(this.poolIdA, this.HIGH_PRICE);
+    await this.stateView.setPrice(this.poolIdB, this.HIGH_PRICE);
+
+    const totalProfit  = AMOUNT_A.muln(3).add(AMOUNT_B.muln(3));
+    const totalCurrent = AMOUNT_A.muln(4).add(AMOUNT_B.muln(4));
+    const feeFraction  = totalProfit.mul(this.FEE_BPS).div(totalCurrent);
+    const feeA = AMOUNT_A.mul(feeFraction).div(this.FEES_DECIMALS);
+    const feeB = AMOUNT_B.mul(feeFraction).div(this.FEES_DECIMALS);
+
+    const userBeforeA = await this.TOKEN_A.balanceOf(user);
+    const userBeforeB = await this.TOKEN_B.balanceOf(user);
+    await tools.advanceTime(TERM + 1);
+    await this.vault.withdraw(uid, { from: user });
+
+    assert((await this.TOKEN_A.balanceOf(user)).sub(userBeforeA).eq(AMOUNT_A.sub(feeA)), 'diff-amounts: user_A');
+    assert((await this.TOKEN_B.balanceOf(user)).sub(userBeforeB).eq(AMOUNT_B.sub(feeB)), 'diff-amounts: user_B');
+    assert(!feeA.eq(feeB), 'fee amounts must differ when token amounts differ');
+  });
+
+  it('multi-token: different amounts [1000, 5000] only TOKEN_A 4x → fee diluted by B, both pay fee', async() => {
+    const AMOUNT_A = new BN(1000);
+    const AMOUNT_B = new BN(5000);
+    const TERM = 2;
+
+    await this.stateView.setPrice(this.poolIdA, this.BASE_PRICE);
+    await this.stateView.setPrice(this.poolIdB, this.BASE_PRICE);
+    const tx = await tools.createDeposit(
+      this.vault, user, [this.TOKEN_A, this.TOKEN_B], [AMOUNT_A, AMOUNT_B], TERM
+    );
+    const uid = tx.logs.find(e => e.event === 'NewDeposit').args.uid.toNumber();
+
+    await this.stateView.setPrice(this.poolIdA, this.HIGH_PRICE);
+
+    const totalProfit  = AMOUNT_A.muln(3);
+    const totalCurrent = AMOUNT_A.muln(4).add(AMOUNT_B);
+    const feeFraction  = totalProfit.mul(this.FEE_BPS).div(totalCurrent);
+    const feeA = AMOUNT_A.mul(feeFraction).div(this.FEES_DECIMALS);
+    const feeB = AMOUNT_B.mul(feeFraction).div(this.FEES_DECIMALS);
+
+    const userBeforeA = await this.TOKEN_A.balanceOf(user);
+    const userBeforeB = await this.TOKEN_B.balanceOf(user);
+    await tools.advanceTime(TERM + 1);
+    await this.vault.withdraw(uid, { from: user });
+
+    assert((await this.TOKEN_A.balanceOf(user)).sub(userBeforeA).eq(AMOUNT_A.sub(feeA)), 'diluted: user_A');
+    assert((await this.TOKEN_B.balanceOf(user)).sub(userBeforeB).eq(AMOUNT_B.sub(feeB)), 'diluted: user_B fee');
+    assert(feeB.gt(feeA), 'larger amount pays larger absolute fee');
   });
 });

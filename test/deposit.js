@@ -19,7 +19,7 @@ contract('Vault | Deposit Tests', ([owner, user, NFTReceiver]) => {
 
     [this.COSMIC, this.USDT, this.USDC] = this.tokens;
 
-    this.poolManager = await tools.setupAllowedTokens(owner, this.vault, this.tokens);
+    this.stateView = await tools.setupAllowedTokens(owner, this.vault, this.tokens);
 
     this.maxTokens = (await this.vault.MAX_TOKENS_IN_DEPOSIT()).toNumber();
     this.maxTerm = (await this.vault.MAX_TERM()).toNumber();
@@ -96,7 +96,7 @@ contract('Vault | Deposit Tests', ([owner, user, NFTReceiver]) => {
 
     const beforeBalance = await this.COSMIC.balanceOf(user);
     const tx = await tools.createDeposit(this.vault, user, [this.COSMIC], [amount], term);
-    const uid = parseInt(tx.logs[0].args.uid);
+    const uid = tx.logs.find(e => e.event === 'NewDeposit').args.uid.toNumber();
 
     await tools.checkNFTOwner(this.nft, uid, user);
     await tools.checkTokenBalance(this.COSMIC, user, beforeBalance.sub(amount));
@@ -113,7 +113,7 @@ contract('Vault | Deposit Tests', ([owner, user, NFTReceiver]) => {
 
     const beforeBalances = await Promise.all(tokens.map(t => t.balanceOf(user)));
     const tx = await tools.createDeposit(this.vault, user, tokens, amounts, term);
-    const uid = parseInt(tx.logs[0].args.uid);
+    const uid = tx.logs.find(e => e.event === 'NewDeposit').args.uid.toNumber();
 
     await tools.checkNFTOwner(this.nft, uid, user);
 
@@ -134,7 +134,7 @@ contract('Vault | Deposit Tests', ([owner, user, NFTReceiver]) => {
     const tx = await this.vault.createDeposit(
       [this.COSMIC.address], [100], 10, NFTReceiver, { from: user }
     );
-    const uid = parseInt(tx.logs[0].args.uid);
+    const uid = tx.logs.find(e => e.event === 'NewDeposit').args.uid.toNumber();
 
     await tools.checkNFTOwner(this.nft, uid, NFTReceiver);
     await tools.checkTokenBalance(this.COSMIC, user, senderBefore.sub(new BN(100)));
@@ -147,9 +147,8 @@ contract('Vault | Deposit Tests', ([owner, user, NFTReceiver]) => {
     const term = 10;
 
     const tx = await tools.createDeposit(this.vault, user, [this.COSMIC], [amount], term);
-    const uid = parseInt(tx.logs[0].args.uid);
-
     const event = tx.logs.find(e => e.event === 'NewDeposit');
+    const uid = event.args.uid.toNumber();
     assert.ok(event, 'NewDeposit event not emitted');
     assert(new BN(event.args.uid).eq(new BN(uid)), 'Wrong uid in NewDeposit event');
     assert.equal(
@@ -162,6 +161,64 @@ contract('Vault | Deposit Tests', ([owner, user, NFTReceiver]) => {
       'Invalid timestamps in event'
     );
   });
+
+  it('Deposit with amount = 1 should succeed', async() => {
+    const tx = await tools.createDeposit(this.vault, user, [this.COSMIC], [new BN(1)], 10);
+    const uid = tx.logs.find(e => e.event === 'NewDeposit').args.uid.toNumber();
+    await tools.checkNFTOwner(this.nft, uid, user);
+    await tools.checkDepositAmounts(this.vault, uid, [this.COSMIC], [new BN(1)]);
+    await tools.checkTokenBalance(this.COSMIC, this.vault.address, new BN(1));
+  });
+
+  it('Deposit with amount = 2 should succeed', async() => {
+    const tx = await tools.createDeposit(this.vault, user, [this.COSMIC], [new BN(2)], 10);
+    const uid = tx.logs.find(e => e.event === 'NewDeposit').args.uid.toNumber();
+    await tools.checkDepositAmounts(this.vault, uid, [this.COSMIC], [new BN(2)]);
+  });
+
+  it('Deposit with amount = 10 should succeed', async() => {
+    const tx = await tools.createDeposit(this.vault, user, [this.COSMIC], [new BN(10)], 10);
+    const uid = tx.logs.find(e => e.event === 'NewDeposit').args.uid.toNumber();
+    await tools.checkDepositAmounts(this.vault, uid, [this.COSMIC], [new BN(10)]);
+  });
+
+  it('Deposit with full user balance should succeed', async() => {
+    const fullBalance = await this.COSMIC.balanceOf(user);
+    const tx = await tools.createDeposit(this.vault, user, [this.COSMIC], [fullBalance], 10);
+    assert.ok(tx.receipt.status);
+    await tools.checkTokenBalance(this.COSMIC, user, new BN(0));
+    await tools.checkTokenBalance(this.COSMIC, this.vault.address, fullBalance);
+  });
+
+  it('Deposit near full user balance should succeed', async() => {
+    const balance = await this.COSMIC.balanceOf(user);
+    const amount = balance.subn(1);
+    const tx = await tools.createDeposit(this.vault, user, [this.COSMIC], [amount], 10);
+    assert.ok(tx.receipt.status);
+    await tools.checkTokenBalance(this.COSMIC, user, new BN(1));
+  });
+
+  it('Multi-token deposit [1, 1] should succeed', async() => {
+    const tx = await tools.createDeposit(this.vault, user, [this.COSMIC, this.USDT], [new BN(1), new BN(1)], 10);
+    const uid = tx.logs.find(e => e.event === 'NewDeposit').args.uid.toNumber();
+    await tools.checkDepositAmounts(this.vault, uid, [this.COSMIC, this.USDT], [new BN(1), new BN(1)]);
+  });
+
+  it('Multi-token deposit [1, 100] should succeed', async() => {
+    const tx = await tools.createDeposit(
+      this.vault, user, [this.COSMIC, this.USDT], [new BN(1), new BN(100)], 10
+    );
+    const uid = tx.logs.find(e => e.event === 'NewDeposit').args.uid.toNumber();
+    await tools.checkDepositAmounts(this.vault, uid, [this.COSMIC, this.USDT], [new BN(1), new BN(100)]);
+  });
+
+  it('Multi-token deposit with very different amounts [1, 1500] should succeed', async() => {
+    const tx = await tools.createDeposit(
+      this.vault, user, [this.COSMIC, this.USDT], [new BN(1), new BN(1500)], 10
+    );
+    const uid = tx.logs.find(e => e.event === 'NewDeposit').args.uid.toNumber();
+    await tools.checkDepositAmounts(this.vault, uid, [this.COSMIC, this.USDT], [new BN(1), new BN(1500)]);
+  });
 });
 
 contract('Vault | Deposit Allowed Token Tests', ([owner, user]) => {
@@ -172,7 +229,7 @@ contract('Vault | Deposit Allowed Token Tests', ([owner, user]) => {
     );
     await this.nft.transferOwnership(this.vault.address, { from: owner });
 
-    this.poolManager = await artifacts.require('UniswapV4PoolManagerMock').new();
+    this.stateView = await artifacts.require('UniswapV4PoolManagerMock').new();
     const sqrtPriceX96 = '281474976710656';
 
     this.COSMIC = await artifacts.require('ERC20Mock').new('COSMIC', 'COS', owner, 10000);
@@ -183,8 +240,8 @@ contract('Vault | Deposit Allowed Token Tests', ([owner, user]) => {
       await token.transfer(user, 5000, { from: owner });
       await token.approve(this.vault.address, 5000, { from: user });
       const poolId = '0x' + token.address.replace('0x', '').toLowerCase().padStart(64, '0');
-      await this.poolManager.setPrice(poolId, sqrtPriceX96);
-      await this.vault.setAllowedToken(token.address, this.poolManager.address, poolId, true, { from: owner });
+      await this.stateView.setPrice(poolId, sqrtPriceX96);
+      await this.vault.setAllowedToken(token.address, this.stateView.address, poolId, true, true, { from: owner });
     }
 
     this.poolIdOf = (token) => '0x' + token.address.replace('0x', '').toLowerCase().padStart(64, '0');
@@ -210,7 +267,7 @@ contract('Vault | Deposit Allowed Token Tests', ([owner, user]) => {
 
   it('Deposit after token disabled should revert', async() => {
     await this.vault.setAllowedToken(
-      this.COSMIC.address, this.poolManager.address, this.poolIdOf(this.COSMIC), false, { from: owner }
+      this.COSMIC.address, this.stateView.address, this.poolIdOf(this.COSMIC), true, false, { from: owner }
     );
 
     await tools.expectRevert(
@@ -221,10 +278,10 @@ contract('Vault | Deposit Allowed Token Tests', ([owner, user]) => {
 
   it('Re-enable disabled token allows deposit again', async() => {
     await this.vault.setAllowedToken(
-      this.COSMIC.address, this.poolManager.address, this.poolIdOf(this.COSMIC), false, { from: owner }
+      this.COSMIC.address, this.stateView.address, this.poolIdOf(this.COSMIC), true, false, { from: owner }
     );
     await this.vault.setAllowedToken(
-      this.COSMIC.address, this.poolManager.address, this.poolIdOf(this.COSMIC), true, { from: owner }
+      this.COSMIC.address, this.stateView.address, this.poolIdOf(this.COSMIC), true, true, { from: owner }
     );
 
     const tx = await tools.createDeposit(this.vault, user, [this.COSMIC], [100], 10);
@@ -244,7 +301,7 @@ contract('Vault | Deposit Allowed Token Tests', ([owner, user]) => {
 
   it('Multi-token deposit with one disabled token should revert', async() => {
     await this.vault.setAllowedToken(
-      this.USDT.address, this.poolManager.address, this.poolIdOf(this.USDT), false, { from: owner }
+      this.USDT.address, this.stateView.address, this.poolIdOf(this.USDT), true, false, { from: owner }
     );
 
     await tools.expectRevert(
@@ -264,7 +321,7 @@ contract('Vault | Deposit Allowed Token Tests', ([owner, user]) => {
     const uid = await tools.setupSingleDeposit(this.vault, user, this.COSMIC, 500, 2);
 
     await this.vault.setAllowedToken(
-      this.COSMIC.address, this.poolManager.address, this.poolIdOf(this.COSMIC), false, { from: owner }
+      this.COSMIC.address, this.stateView.address, this.poolIdOf(this.COSMIC), true, false, { from: owner }
     );
 
     const balanceBefore = await this.COSMIC.balanceOf(user);
@@ -282,7 +339,7 @@ contract('Vault | Deposit Allowed Token Tests', ([owner, user]) => {
     await noPrice.approve(this.vault.address, 500, { from: user });
     const poolId = '0x' + noPrice.address.replace('0x', '').toLowerCase().padStart(64, '0');
 
-    await this.vault.setAllowedToken(noPrice.address, this.poolManager.address, poolId, true, { from: owner });
+    await this.vault.setAllowedToken(noPrice.address, this.stateView.address, poolId, true, true, { from: owner });
 
     await tools.expectRevert(
       tools.createDeposit(this.vault, user, [noPrice], [100], 10),
@@ -294,7 +351,7 @@ contract('Vault | Deposit Allowed Token Tests', ([owner, user]) => {
     const uid = await tools.setupSingleDeposit(this.vault, user, this.COSMIC, 500, 100);
 
     await this.vault.setAllowedToken(
-      this.COSMIC.address, this.poolManager.address, this.poolIdOf(this.COSMIC), false, { from: owner }
+      this.COSMIC.address, this.stateView.address, this.poolIdOf(this.COSMIC), true, false, { from: owner }
     );
 
     const balanceBefore = await this.COSMIC.balanceOf(user);
@@ -303,6 +360,20 @@ contract('Vault | Deposit Allowed Token Tests', ([owner, user]) => {
     await tools.checkTokenBalance(this.COSMIC, user, balanceBefore.add(new BN(500)));
     await tools.checkNFTBurned(this.nft, uid);
     await tools.checkDepositActive(this.vault, uid, false);
+  });
+
+  it('viewTokenListById: returns tokens array matching deposited tokens', async() => {
+    const uid = await tools.setupSingleDeposit(this.vault, user, this.COSMIC, 100, 10);
+    const tokens = await this.vault.viewTokenListById(uid);
+    assert.equal(tokens.length, 1, 'wrong length for single-token deposit');
+    assert.equal(tokens[0].toLowerCase(), this.COSMIC.address.toLowerCase(), 'wrong token address');
+  });
+
+  it('viewAmountListById: returns amounts array matching deposited amounts', async() => {
+    const uid = await tools.setupSingleDeposit(this.vault, user, this.COSMIC, 100, 10);
+    const amounts = await this.vault.viewAmountListById(uid);
+    assert.equal(amounts.length, 1, 'wrong length for single-token deposit');
+    assert(new BN(amounts[0]).eq(new BN(100)), 'wrong amount');
   });
 
   it('viewStartPriceX96ListById: returns prices array matching deposited tokens', async() => {
@@ -322,11 +393,11 @@ contract('Vault | Deposit Allowed Token Tests', ([owner, user]) => {
     await noPrice.transfer(user, 500, { from: owner });
     await noPrice.approve(this.vault.address, 500, { from: user });
     const noPricePoolId = '0x' + noPrice.address.replace('0x', '').toLowerCase().padStart(64, '0');
-    await this.vault.setAllowedToken(noPrice.address, this.poolManager.address, noPricePoolId, true, { from: owner });
+    await this.vault.setAllowedToken(noPrice.address, this.stateView.address, noPricePoolId, true, true, { from: owner });
     await tools.expectRevert(tools.createDeposit(this.vault, user, [noPrice], [100], 10), 'no price');
 
     const uid = await tools.setupSingleDeposit(this.vault, user, this.USDT, 100, 2);
-    await this.poolManager.setPrice(this.poolIdOf(this.USDT), '0');
+    await this.stateView.setPrice(this.poolIdOf(this.USDT), '0');
     await tools.advanceTime(3);
     await tools.expectRevert(this.vault.withdraw(uid, { from: user }), 'no price');
   });

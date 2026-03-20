@@ -32,6 +32,7 @@ contract('Vault | Full Cycle Tests', ([deployer, A, B, C, penaltyReceiver]) => {
     await tools.setupAllowedTokens(deployer, this.vault, this.tokens);
 
     this.penaltyBP = await this.vault.emergencyPenalty();
+    this.FEES_DECIMALS = new BN(await this.vault.FEES_DECIMALS());
   });
 
   it('Full cycle: multi-user deposit → normal withdraw → emergency withdraw', async() => {
@@ -84,7 +85,7 @@ contract('Vault | Full Cycle Tests', ([deployer, A, B, C, penaltyReceiver]) => {
     await tools.checkNFTBurned(this.nft, emergencyUid);
 
     for (let i = 0; i < this.tokens.length; i++) {
-      const penaltyAmount = amounts[i].mul(this.penaltyBP).div(new BN(10000));
+      const penaltyAmount = amounts[i].mul(this.penaltyBP).div(this.FEES_DECIMALS);
       await tools.checkTokenBalance(this.tokens[i], A, balancesBeforeEmergency[i].add(amounts[i]).sub(penaltyAmount));
       await tools.checkTokenBalance(this.tokens[i], penaltyReceiver, penaltyBefore[i].add(penaltyAmount));
     }

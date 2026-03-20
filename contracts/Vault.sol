@@ -14,15 +14,16 @@ interface IERC721 {
     function transferOwnership(address newOwner) external;
 }
 
-interface IUniswapV4PoolManager {
+interface IUniswapV4StateView {
     function getSlot0(bytes32 poolId) external view returns (uint160 sqrtPriceX96, int24 tick, uint24 protocolFee, uint24 lpFee);
 }
 
 interface IVault {
     struct AllowedToken {
         address token;
-        address poolManager;
+        address stateView;
         bytes32 poolId;
+        bool isToken0; // true = use token0 in pair, false = token1
         bool status;
     }
 
@@ -39,7 +40,7 @@ interface IVault {
     function withdraw(uint256 uid) external;
     function emergencyWithdraw(uint256 uid) external;
 
-    function setAllowedToken(address _token, address _poolManager, bytes32 _poolId, bool _status) external;
+    function setAllowedToken(address _token, address _stateView, bytes32 _poolId, bool _isToken0, bool _status) external;
     function changeEmergencyPenalty(uint256 _newEmergencyPenalty) external;
     function changeEmergencyPenaltyReceiver(address _newEmergencyPenaltyReveiver) external;
 
@@ -47,7 +48,7 @@ interface IVault {
     function viewAmountListById(uint256 uid) external view returns (uint256[] memory);
     function viewStartPriceX96ListById(uint256 uid) external view returns (uint256[] memory);
 
-    event TokenUpdated(address token, address poolManager, bytes32 poolId, bool status);
+    event TokenUpdated(address token, address stateView, bytes32 poolId, bool isToken0, bool status);
     event NewDeposit(uint256 uid, uint256 startTimestamp, uint256 endTimestamp, address[] tokens, uint256[] amounts, uint256[] prices, address receiver);
     event Withdraw(address indexed user, uint256 uid, bool isEmergency);
     event SetEmergencyPenalty(uint256 emergencyPenalty);
@@ -123,17 +124,17 @@ contract Vault is IVault, ReentrancyGuard, Ownable {
     /**
      * @notice Add or update allowed token. Admin only
      * @param _token address token contract address
-     * @param _poolManager address uniswap pool manager
+     * @param _stateView address uniswap pool manager
      * @param _poolId address uniswap pool ID
      * @param _status bool on/off token
      */
-    function setAllowedToken(address _token, address _poolManager, bytes32 _poolId, bool _status) external onlyOwner {
+    function setAllowedToken(address _token, address _stateView, bytes32 _poolId, bool _isToken0, bool _status) external onlyOwner {
         require(_token != address(0), "token can't be 0x");
-        require(_poolManager != address(0), "poolManager can't be 0x");
+        require(_stateView != address(0), "stateView can't be 0x");
 
-        allowedTokens[_token] = AllowedToken(_token, _poolManager, _poolId, _status);
+        allowedTokens[_token] = AllowedToken(_token, _stateView, _poolId, _isToken0, _status);
 
-        emit TokenUpdated(_token, _poolManager, _poolId, _status);
+        emit TokenUpdated(_token, _stateView, _poolId, _isToken0, _status);
     }
 
     /**
@@ -314,15 +315,21 @@ contract Vault is IVault, ReentrancyGuard, Ownable {
     // --- Internal logic ---
 
     function _getV4PriceX96(AllowedToken memory allowed) internal view returns (uint256) {
-        IUniswapV4PoolManager manager = IUniswapV4PoolManager(allowed.poolManager);
+        IUniswapV4StateView manager = IUniswapV4StateView(allowed.stateView);
 
         (uint160 sqrtPriceX96,,,) = manager.getSlot0(allowed.poolId);
-
         require(sqrtPriceX96 > 0, "no price");
 
-        uint256 priceX96 = (uint256(sqrtPriceX96) * uint256(sqrtPriceX96)) >> 96;
+        // price of token1/token0 in Q96
+        uint256 directPriceX96 = (uint256(sqrtPriceX96) * uint256(sqrtPriceX96)) >> 96;
+        require(directPriceX96 > 0, "bad price");
 
-        return priceX96;
+        if (allowed.isToken0) {
+            return directPriceX96;
+        }
+
+        // inverse price in Q96: (2^192) / directPriceX96
+        return (uint256(1) << 192) / directPriceX96;
     }
 
     function _safeTransferAndCheckDebit(IERC20 token, address to, uint256 amount) internal {

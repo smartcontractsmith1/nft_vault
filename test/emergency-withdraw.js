@@ -18,7 +18,7 @@ contract('Vault | Emergency Withdraw Tests', ([owner, user, otherUser, penaltyRe
     ]);
     [this.COSMIC, this.USDT, this.USDC] = this.tokens;
 
-    this.poolManager = await tools.setupAllowedTokens(owner, this.vault, this.tokens);
+    this.stateView = await tools.setupAllowedTokens(owner, this.vault, this.tokens);
     this.FEES_DECIMALS = new BN(await this.vault.FEES_DECIMALS());
   });
 
@@ -222,6 +222,37 @@ contract('Vault | Emergency Withdraw Tests', ([owner, user, otherUser, penaltyRe
     assert.equal(event.args.user.toLowerCase(), user.toLowerCase(), 'Wrong user in Withdraw event');
     assert(new BN(event.args.uid).eq(new BN(uid)), 'Wrong uid in Withdraw event');
     assert.equal(event.args.isEmergency, true, 'isEmergency should be true');
+  });
+
+  it('Emergency withdraw: amount=1 penalty rounds to 0, full amount returned to user', async() => {
+    const uid = await tools.setupSingleDeposit(this.vault, user, this.COSMIC, 1, 100);
+
+    const balanceBefore = await this.COSMIC.balanceOf(user);
+    const penaltyBefore = await this.COSMIC.balanceOf(penaltyReceiver);
+
+    await this.vault.emergencyWithdraw(uid, { from: user });
+
+    await tools.checkTokenBalance(this.COSMIC, user, balanceBefore.add(new BN(1)));
+    await tools.checkTokenBalance(this.COSMIC, penaltyReceiver, penaltyBefore);
+    await tools.checkNFTBurned(this.nft, uid);
+    await tools.checkDepositActive(this.vault, uid, false);
+  });
+
+  it('Emergency withdraw after deposit term expires still works with penalty', async() => {
+    const uid = await tools.setupSingleDeposit(this.vault, user, this.COSMIC, 500, 1);
+
+    const balanceBefore  = await this.COSMIC.balanceOf(user);
+    const penaltyBefore  = await this.COSMIC.balanceOf(penaltyReceiver);
+    const penaltyBP      = await this.vault.emergencyPenalty();
+    const penaltyAmount  = new BN(500).mul(new BN(penaltyBP)).div(this.FEES_DECIMALS);
+
+    await tools.advanceTime(5);
+    await this.vault.emergencyWithdraw(uid, { from: user });
+
+    await tools.checkTokenBalance(this.COSMIC, user, balanceBefore.add(new BN(500)).sub(penaltyAmount));
+    await tools.checkTokenBalance(this.COSMIC, penaltyReceiver, penaltyBefore.add(penaltyAmount));
+    await tools.checkNFTBurned(this.nft, uid);
+    await tools.checkDepositActive(this.vault, uid, false);
   });
 
 });

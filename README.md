@@ -23,8 +23,9 @@ _successFeeReceiver - Success fee receiver address
 4. Add some tokens to **Vault** `allowedTokens`. Method `setAllowedToken`:
 ```
 _token - token address
-_poolManager - Uniswap v4 pool manager
+_stateView - Uniswap v4 state view
 _poolId - token-USDT pair pool ID
+_isToken0 - token position in pair (true = 0, false = 1)
 _status - TRUE (token is active)
 ```
 
